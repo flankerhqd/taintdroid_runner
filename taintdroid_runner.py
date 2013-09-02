@@ -350,7 +350,8 @@ class RunnerThread(Thread):
             if (theSteps & SimulationSteps.MONKEY_BEFORE_POWER):
                 self._runMonkey(theEmulator, theApp.getPackage(), numMonkeyEventsFirst)
             if (theSteps & SimulationSteps.POWER):
-                self._runPowerSimulation(theEmulator.getTelnetClient())
+                #self._runPowerSimulation(theEmulator.getTelnetClient())
+                pass
             if (theSteps & SimulationSteps.MONKEY):
                 self._runMonkey(theEmulator, theApp.getPackage(), numMonkeyEventsLast)
                 
@@ -611,7 +612,7 @@ class TaintDroidRunner:
         Return report directory for storing report.
         """
         if self.reportPathSuffix[-1] == '/':
-            self.reportPathSuffix = self.reportPathSuffx[:-1]
+            self.reportPathSuffix = self.reportPathSuffix[:-1]
         return '%s_%s-%s/' % (self.reportPathSuffix, Utils.getDateAsString(self.startTime), Utils.getTimeAsString(self.startTime))
 
     def _getAppThreadLogFile(self, theSampleId, theFileName):
