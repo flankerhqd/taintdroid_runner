@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 ################################################################################
 #
 # Copyright (c) 2011-2012, Daniel Baeumges (dbaeumges@googlemail.com)
@@ -18,6 +19,7 @@
 
 import os
 import sys
+import codecs
 
 # ================================================================================
 # TaintDroid Enums
@@ -288,7 +290,7 @@ class Logger:
         elif theMode == LogMode.FILE:
             if theLogFile is None:
                 raise ValueError('Log file is not set')
-            self.log = open(theLogFile, 'a')            
+            self.log = codecs.open(theLogFile, 'a',encoding="utf-8")            
         elif theMode == LogMode.ARRAY:
             self.log = ArrayLogFile()
 
@@ -296,7 +298,7 @@ class Logger:
         return self.level
 
     def getLogEntries(self):
-        if theMode == LogMode.ARRAY:
+        if self.mode == LogMode.ARRAY:
             return self.log.logEntries
         else:
             return []
@@ -323,6 +325,8 @@ class Logger:
         self.__writeInternal(theMsg)
 
     def __writeInternal(self, theMsg):
+        if isinstance(theMsg,str):
+            theMsg = theMsg.decode('utf-8')
         self.log.write('%s\n' % theMsg)
         if self.printAlwaysFlag:
             print theMsg

@@ -192,7 +192,7 @@ class EmulatorClient:
         """
         Changes the global taint log taint mask
         """
-        self.setProperty(TaintLogKeyEnum.GLOBAL_ACTION_TAINT_KEY, theMask)
+        self.setProperty(TaintLogKeyEnum.GLOBAL_TAINT_MASK_KEY, theMask)
 
     def setSimCountryIso(self, theIsoCode):
         """

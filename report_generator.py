@@ -29,7 +29,7 @@ class ReportGenerator:
     @staticmethod
     def generateMainReport(theFileName, theReportData):
         report = open(theFileName, "w")
-        report.write('<html><head><title>TaintDroid Runner Report</title></head><body><p>')
+        report.write('<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>TaintDroid Runner Report</title></head><body><p>')
         report.write('<h1>TaintDroid Runner Report</h1>')
 
         report.write('<h2>Parameters</h2>')
@@ -61,7 +61,7 @@ class ReportGenerator:
         
         # Write report
         report = codecs.open(theFileName, "w", "utf-8")
-        report.write('<html><head><title>TaintDroid Runner Report for %s</title></head><body><p>' % app.getPackage())
+        report.write('<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>TaintDroid Runner Report for %s</title></head><body><p>' % app.getPackage())
         report.write('<h1>TaintDroid Runner Report for %s</h1>' % (app.getPackage()))
         
         report.write('<h2>Parameters</h2>')        

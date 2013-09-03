@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #
 # Copyright (c) 2011-2012, Daniel Baeumges (dbaeumges@googlemail.com)
@@ -185,6 +186,7 @@ class RunnerThread(Thread):
             pass
         except (EmulatorClientError,Exception) as ex:
             traceback.print_exc(file=self.log.log)
+            traceback.print_exc()
             self.log.error("error in emulator startup")
             self.result['errorList'].append(ex)
             self.result['endTime'] = datetime.datetime.now()
@@ -420,7 +422,7 @@ class RunnerThread(Thread):
                 logAnalyzer.getJson2PyFailedErrorList())
 
         except EmulatorClientError as ecErr:
-            self.result['errorList'].append(exErr)
+            self.result['errorList'].append(ecErr)
 
         except TaintLogAnalyzerError as tlaErr:
             self.result['errorList'].append(tlaErr)
