@@ -20,6 +20,7 @@
 import os
 import sys
 import codecs
+import traceback
 
 # ================================================================================
 # TaintDroid Enums
@@ -325,9 +326,15 @@ class Logger:
         self.__writeInternal(theMsg)
 
     def __writeInternal(self, theMsg):
-        if isinstance(theMsg,str):
-            theMsg = theMsg.decode('utf-8')
-        self.log.write('%s\n' % theMsg)
+        try:
+            if isinstance(theMsg,str):
+                theMsg = theMsg.decode('utf-8')
+            self.log.write('%s\n' % theMsg)
+        except:
+            traceback.print_exc()
+            print theMsg
+            self.log.write("error in string")
+            
         if self.printAlwaysFlag:
             print theMsg
 
@@ -378,6 +385,10 @@ class Utils:
         return "%04d%02d%02d" % (theDate.year, theDate.month, theDate.day)
 
 
+    @staticmethod
+    def getDateTimeAsString(theDate):
+        return Utils.getDateAsString(theDate)+Utils.getTimeAsString(theDate)
+    
     @staticmethod
     def getTimeAsString(theTime):
         return "%02d%02d%02d" % (theTime.hour, theTime.minute, theTime.second)

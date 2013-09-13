@@ -25,16 +25,20 @@ from ms_db_interface import MsDbInterface, MsDbInterfaceError
 from optparse import OptionParser
 from report_generator import ReportGenerator
 from taintlog_analyzer import TaintLogAnalyzer, TaintLogAnalyzerError
-from taintlog_json import CallActionLogEntry, CipherUsageLogEntry, FileSystemLogEntry, NetworkSendLogEntry, SSLLogEntry, SendSmsLogEntry
+from taintlog_json import CallActionLogEntry, CipherUsageLogEntry, FileSystemLogEntry, NetworkSendLogEntry, SSLLogEntry, SendSmsLogEntry, SimulatorActionLogEntry
 from taintlog_json import AppReportEntry, MainReportEntry
 from taintlog_json import JsonFactory
 from threading import Thread
+from detection.action_processor import ActionProcessor
 
+import random
 import datetime
 import os
 import shutil
 import time
 import traceback
+import urllib2
+import urllib
 
 
 # ========================================================================
@@ -96,6 +100,8 @@ class RunnerThread(Thread):
         self.result = {}
 
         self.cancelFlag = False  # Flag for canceling run
+        self.resultFetchedFlag = False # Flag for whether has fetched logcat
+        self.logcatRedirectFile = '/mnt/sdcard/logcat.log'
 
     def __checkForCancelation(self):
         """
@@ -109,6 +115,9 @@ class RunnerThread(Thread):
             raise KeyboardInterrupt
 
     def getResult(self):
+        #in case thread is not responding, fetch it ourselves
+        if self.resultFetchedFlag == False and self.emulator is not None and self.emulator.isEmulatorRunning():
+            self._buildLogEntry()                                                                         
         return self.result
 
     def killEmulator(self):
@@ -187,7 +196,7 @@ class RunnerThread(Thread):
         except (EmulatorClientError,Exception) as ex:
             traceback.print_exc(file=self.log.log)
             traceback.print_exc()
-            self.log.error("error in emulator startup")
+            self.log.error("error in emulator")
             self.result['errorList'].append(ex)
             self.result['endTime'] = datetime.datetime.now()
 
@@ -296,6 +305,7 @@ class RunnerThread(Thread):
 
         # Clear log
         theEmulator.clearLog()
+        self.result['simulatorActions'] = []
 
         # Install app
         self.log.write('- %s: Install app' %
@@ -307,6 +317,12 @@ class RunnerThread(Thread):
                 #numRetries += 1
                 try:
                     theEmulator.installApp(theApp.getApk())
+                    self.result['simulatorActions'].append(
+                                                      SimulatorActionLogEntry.makeInstallAction(
+                                                                                                theApp.getApk(),
+                                                                                                Utils.getDateTimeAsString(datetime.datetime.now())
+                                                                                                )
+                                                      )
                     break
 
                 except EmulatorClientError as ecErr:
@@ -337,14 +353,15 @@ class RunnerThread(Thread):
         # theEmulator.setSimCountryIso('de')
 
         # Start logcat redirect
-        logcatRedirectFile = '/mnt/sdcard/logcat.log'
-        theEmulator.startLogcatRedirect(logcatRedirectFile, self.maxLogcatSize)
+        
+        theEmulator.startLogcatRedirect(self.logcatRedirectFile, self.maxLogcatSize)
 
         # Switch on taint tracking
         #theEmulator.setProperty('tdroid.global.taintmask', '7176')
         theEmulator.changeGlobalTaintLogState('1', True)
+        theEmulator.changeGlobalTaintLogFileSystemTaintMask('1')
 
-        # Start all services
+        # Do not start all services in one time, which may cause ANR
         self.__checkForCancelation()
         if (theSteps & SimulationSteps.START):
             try:
@@ -357,30 +374,31 @@ class RunnerThread(Thread):
         keyboardInterruptFlag = False
         try:
             self.log.info('Run simulation')
-
+            #execute app first
+            if (theSteps & SimulationSteps.SLEEP):
+                self._runSleep(theEmulator, theApp)
             if (theSteps & SimulationSteps.MONKEY_BEFORE_GSM):
                 self._runMonkey(
                     theEmulator, theApp.getPackage(), numMonkeyEventsFirst)
             if (theSteps & SimulationSteps.GSM):
-                self._runGsmSimulation(theEmulator.getTelnetClient())
+                self._runGsmSimulation(theEmulator.getTelnetClient(), self.result['simulatorActions'])
             if (theSteps & SimulationSteps.MONKEY_BEFORE_GEO):
                 self._runMonkey(
                     theEmulator, theApp.getPackage(), numMonkeyEventsFirst)
             if (theSteps & SimulationSteps.GEO):
-                self._runGeoSimulation(theEmulator.getTelnetClient())
+                self._runGeoSimulation(theEmulator.getTelnetClient(),self.result['simulatorActions'])
             if (theSteps & SimulationSteps.MONKEY_BEFORE_SMS):
                 self._runMonkey(
                     theEmulator, theApp.getPackage(), numMonkeyEventsFirst)
-            if (theSteps & SimulationSteps.SLEEP):
-                self._runSleep(theEmulator, theApp)
             if (theSteps & SimulationSteps.SMS):
-                self._runSmsSimulation(theEmulator.getTelnetClient())
+                self._runSmsSimulation(theEmulator.getTelnetClient(), self.result['simulatorActions'])
             if (theSteps & SimulationSteps.MONKEY_BEFORE_POWER):
                 self._runMonkey(
                     theEmulator, theApp.getPackage(), numMonkeyEventsFirst)
+            '''some emulator crashes on power command, comment it out
             if (theSteps & SimulationSteps.POWER):
-                # self._runPowerSimulation(theEmulator.getTelnetClient())
-                pass
+                self._runPowerSimulation(theEmulator.getTelnetClient())
+            '''
             if (theSteps & SimulationSteps.MONKEY):
                 self._runMonkey(
                     theEmulator, theApp.getPackage(), numMonkeyEventsLast)
@@ -396,10 +414,19 @@ class RunnerThread(Thread):
         # Wait?
         if (theSteps & SimulationSteps.WAIT_FOR_RAW_INPUT):
             raw_input('Press to end...')
+        # Simulate End
 
-        # End
+        self._buildLogEntry()
+        # Return
+        return keyboardInterruptFlag
+
+    def _buildLogEntry(self):
+        if self.resultFetchedFlag is True:
+            return
         logAnalyzer = None
         try:
+            theEmulator = self.emulator
+            theApp = self.app
             self.log.write('- %s: Analyze log' %
                            Utils.getTimeAsString(datetime.datetime.now()))
             # Store log in logfile
@@ -410,8 +437,8 @@ class RunnerThread(Thread):
             logcatFileName = self._getLogcatFileName(
                 self.tdRunnerMain._getLogDirPath(), theApp.getId(), theApp.getApkName())
             theEmulator.storeLogcatRedirectFile(
-                logcatRedirectFile, logcatFileName)
-
+                self.logcatRedirectFile, logcatFileName)
+            
             # Build LogAnalyzer
             logAnalyzer = TaintLogAnalyzer(theLogger=self.log)
             # logAnalyzer.setLogString(log)
@@ -430,16 +457,14 @@ class RunnerThread(Thread):
         # Build result entry
         self.result['log'] = logAnalyzer
         self.result['endTime'] = datetime.datetime.now()
-
-        # Return
-        return keyboardInterruptFlag
+        self.resultFetchedFlag = True
 
     # ========================================================================
     # Simulations
     # ========================================================================
-    def _runGsmSimulation(self, theTelnetClient):
+    def _runGsmSimulation(self, theTelnetClient, logResult):
         """
-        Simulates incoming calls
+        Simulates incoming calls, log it
         """
         self.__checkForCancelation()
 
@@ -451,14 +476,16 @@ class RunnerThread(Thread):
         theTelnetClient.changeGSMState(GsmState.ON)
         time.sleep(8)
 
-        theTelnetClient.call('+491702662662')
+        number = '+491702662662'
+        theTelnetClient.call(number)
+        logResult.append(SimulatorActionLogEntry.makeCallInAction(number,Utils.getDateTimeAsString(datetime.datetime.now())))
         time.sleep(1)
-        theTelnetClient.acceptCall('+491702662662')
+        theTelnetClient.acceptCall(number)
         time.sleep(10)
-        theTelnetClient.cancelCall('+491702662662')
+        theTelnetClient.cancelCall(number)
         time.sleep(1)
 
-    def _runGeoSimulation(self, theTelnetClient):
+    def _runGeoSimulation(self, theTelnetClient, logResult):
         """
         Simulates route in China
         """
@@ -468,6 +495,7 @@ class RunnerThread(Thread):
                       Utils.getTimeAsString(datetime.datetime.now()))
 
         theTelnetClient.changeLocation('28.411629', '119.054553')
+        logResult.append(SimulatorActionLogEntry.makeGpsAction('28.411629','119.054553', Utils.getDateTimeAsString(datetime.datetime.now())))
         time.sleep(3)
         theTelnetClient.changeLocation('28.411629', '118.554553')
         time.sleep(3)
@@ -480,7 +508,7 @@ class RunnerThread(Thread):
         theTelnetClient.changeLocation('27.411629', '115.954553')
         time.sleep(3)
 
-    def _runSmsSimulation(self, theTelnetClient):
+    def _runSmsSimulation(self, theTelnetClient, logResult):
         """
         Simulates SMS
         """
@@ -489,12 +517,53 @@ class RunnerThread(Thread):
         self.log.info('- %s: SMS simulation' %
                       Utils.getTimeAsString(datetime.datetime.now()))
 
-        theTelnetClient.sendSms(
-            '+491702662662', 'Hi there. How are you? I am currently on a business trip in Germany. What about a short meeting?')
-        time.sleep(3)
-        theTelnetClient.sendSms(
-            '+491702662662', 'Ok. Fine. See you at 6pm in front of the cafe')
-        time.sleep(3)
+        smss = [
+               {
+                "number" : '+491702662662',
+                "content" : 'Hi there. How are you? I am currently on a business trip in Germany. What about a short meeting?',
+                "interval": 7,
+                },
+               {
+                "number" : '+491702662662',
+                "content" : 'Ok. Fine. See you at 6pm in front of the cafe',
+                "interval": 3,
+                },
+                {
+                 "number" : "81001",
+                 "content" : "hello, how are you?",
+                 "interval": 11,
+                 },
+                {
+                 "number" : "13731234561",
+                 "content" : "HelloDudeHowAreYouRecentLyImissYouSoMuch",
+                "interval": 19,
+                 },
+                {
+                 "number" : "13731234561",
+                 "content" : "IpayYou500DollarThroughPayPalPleaseCheckItOut",
+                 "interval": 17,
+                 },
+                {
+                 "number" : "13731234561",
+                 "content" : "LoveYouSoMuchGoodByeFuckItOut",
+                 "interval": 1,
+                 },
+                {
+                 "number" : "13731234561",
+                 "content" : "HelloWorld",
+                 "interval": 13,
+                 },
+                {
+                 "number" : "13731234561",
+                 "content" : "HellOhYeah",
+                 "interval": 3,
+                 },
+            ]
+        
+        for sms in smss:
+            theTelnetClient.sendSms(sms["number"], sms["content"])
+            logResult.append(SimulatorActionLogEntry.makeSmsAction(sms["number"], sms["content"], Utils.getDateTimeAsString(datetime.datetime.now())))
+            time.sleep(sms["interval"])
         #theTelnetClient.sendSms('81001', 'Dummy message for Android.RuFraud')
         # time.sleep(3)
 
@@ -616,6 +685,8 @@ class TaintDroidRunner:
         self.startTime = datetime.datetime.now()
 
         self.resultVec = []
+        
+        self.remoteUrl = None
 
         # Report mode
         if self.mode == TaintDroidRunnerMode.REPORT_MODE or \
@@ -817,8 +888,18 @@ class TaintDroidRunner:
                         # Build thread
                         runnerThread = RunnerThread(
                             self, theApp=app, theLogger=threadLogger)
-                        runnerThread.emulatorPort = self.emulatorStartPort + \
-                            (threadIndex * 2)
+                        #try to decide emulatorPort based on name, e.g. 1.apk
+                        #port must be in [5554,5584] and even
+                        port = (threadIndex *2)
+                        try:
+                            port = (int)(app.getApkFileName().split(".apk")[0])
+                        except ValueError, e:
+                            print "not a valid integer filename, use thread index as port"
+                        runnerThread.emulatorPort = port%30 + self.emulatorStartPort
+                        if runnerThread.emulatorPort %2 == 1:
+                            runnerThread.emulatorPort = runnerThread.emulatorPort + 1
+                        else:
+                            runnerThread.emulatorPort = runnerThread.emulatorPort + 2
                         runnerThread.daemon = False
                         runnerThread.startTime = datetime.datetime.now()
 
@@ -1001,6 +1082,8 @@ class TaintDroidRunner:
             try:
                 ReportGenerator.generateAppReport(reportFile, theThreadResult)
             except Exception as ex:
+                traceback.print_exc()
+                traceback.print_exc(file=self.log.log)
                 self.log.write('Error during report generation: %s' % str(ex))
 
             # Add to result list
@@ -1123,6 +1206,7 @@ class TaintDroidRunner:
                 logcatFileName = theThreadResult['logcatFileName']
             reportResultEntry = {'id': appId,
                                  'appPackage': theThreadResult['app'].getPackage(),
+                                 'appName':theThreadResult['app'].getApkFileName(),
                                  'appPath': theThreadResult['app'].getApk(),
                                  'reportName': reportName,
                                  'startTime': theThreadResult['startTime'],
@@ -1135,7 +1219,10 @@ class TaintDroidRunner:
                                  'numNetwork': numNetwork,
                                  'numSSL': numSSL,
                                  'numSMS': numSMS,
-                                 'numErrors': numErrors}
+                                 'numErrors': numErrors,
+                                 'actionList' : theThreadResult['log'].logEntryList,
+                                 'simulatorActions' : theThreadResult['simulatorActions']
+                                 }
 
             self.resultVec.append(reportResultEntry)
 
@@ -1172,6 +1259,7 @@ class TaintDroidRunner:
             ReportGenerator.generateMainReport(reportFile, report)
 
             jsonFileName = '%sreport.json' % (self.reportPath)
+            finalFileName = '%sfinal.json' % (self.reportPath)
             mainReport = MainReportEntry(
                 workingDir=Utils.addSlashToPath(os.getcwd()),
                 startTime='%s %s' % (Utils.getDateAsString(
@@ -1185,19 +1273,49 @@ class TaintDroidRunner:
                 appReport = AppReportEntry(id=appResult['id'],
                                            appPackage=appResult['appPackage'],
                                            appPath=appResult['appPath'],
+                                           appName=appResult['appName'],
                                            logcatFile=appResult[
                                                'logcatFileName'],
                                            md5Hash=appResult['appMd5Hash'],
                                            startTime='%s %s' % (Utils.getDateAsString(
                                                appResult[
                                                    'startTime']), Utils.getTimeAsString(appResult['startTime'])),
-                                           endTime='%s %s' % (Utils.getDateAsString(appResult['endTime']), Utils.getTimeAsString(appResult['endTime'])))
+                                           endTime='%s %s' % (Utils.getDateAsString(appResult['endTime']), Utils.getTimeAsString(appResult['endTime'])),
+                                           actionList = appResult['actionList'],
+                                           simulatorActions = appResult['simulatorActions'],
+                                           )
                 mainReport.appList.append(appReport)
 
             jsonFactory = JsonFactory()
             jsonReportStr = jsonFactory.py2Json(mainReport)
             jsonFile = open(jsonFileName, "w")
             jsonFile.write(jsonReportStr)
+            
+            self._genFinalReport(mainReport, finalFileName)
+    
+    def _genFinalReport(self, report, outfile):
+        processor = ActionProcessor()
+        processor.mainReport = report
+        processor.extractData()
+        final = processor.judgeLevel()
+        with open(outfile,"w") as f:
+            f.write(JsonFactory().py2Json(final))
+        
+        if self.remoteUrl is not None:
+            try:     
+                #data = urllib.quote(finalStr.encode("utf-8"))
+                #clear behaviors since ErYe doesn't need it
+                final.behaviors = None
+                data = JsonFactory().py2Json(final)
+                print data
+                req = urllib2.Request(self.remoteUrl,data, {'Content-Type': 'application-json'})
+                resp = urllib2.urlopen(req)
+                print resp.read()
+            except Exception, e:
+                self.log.write("post result to "+self.remoteUrl+" failed")
+                traceback.print_exc()
+                traceback.print_exc(file=self.log.log)
+        
 
 
 # ========================================================================
@@ -1252,6 +1370,12 @@ def main():
     parser.add_option(
         '-v', '--verbose', action='store_true', dest='verbose', default=False)
     parser.add_option('-q', '--quiet', action='store_false', dest='verbose')
+    parser.add_option(
+        '-u', '--url', metavar = '<url>', help = 'set url to submit json report'
+                    )
+    parser.add_option(
+        '', '--config', metavar = '<config>', help = 'read config ini file'
+                )
 
     (options, args) = parser.parse_args()
     mode = 'default'
@@ -1284,7 +1408,19 @@ def main():
     tdroidRunner.sleepTime = int(options.sleepTime)
 
     tdroidRunner.startTime = datetime.datetime.now()
+    tdroidRunner.remoteUrl = options.url
 
+    #read from config, if present
+    if options.config is not None:
+        import ConfigParser
+        cf = ConfigParser.ConfigParser()
+        cf.read(options.config)
+        tdroidRunner.imageDirPath = cf.get("emulator","imageDirPath")
+        tdroidRunner.sdkPath = cf.get("emulator","sdkPath")
+        tdroidRunner.avdName = cf.get("emulator","avdName")
+        
+        tdroidRunner.remoteUrl = cf.get("report","remoteUrl")
+        
     # Build logger
     logLevel = LogLevel.INFO
     if options.verbose:

@@ -172,6 +172,8 @@ class TaintLogAnalyzer:
             try:
                 self.logEntryList.extend(self.jsonFactory.json2Py(jsonString))
             except Exception, ex:
+                import traceback
+                traceback.print_exc()
                 self.json2pyFailedList.append(jsonString)
                 errMsg = 'Conversion for JSON string \'%s\' failed: %s.' % (jsonString, str(ex))
                 self.log.error(errMsg)
@@ -200,7 +202,7 @@ class TaintLogAnalyzer:
                isinstance(logEntry, SendSmsLogEntry):
                 stackTrace = logEntry.stackTraceStr.split('||')
                 logEntry.stackTrace = stackTrace[:len(stackTrace)-1]
-                
+
             # Cipher cleaning (combine inputs and outputs)
             if isinstance(logEntry, CipherUsageLogEntry):
                 if logEntry.action == CipherActionEnum.INIT_ACTION:

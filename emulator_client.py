@@ -87,6 +87,9 @@ class EmulatorClient:
 
         self.adbProcess = None
 
+    def isEmulatorRunning(self):
+        return self.emulator is not None
+    
     def __del__(self):
         if not self.logcatRedirectProcess is None:
             self.logcatRedirectProcess.kill()
@@ -110,7 +113,10 @@ class EmulatorClient:
             args.extend(['-sdcard',  '%ssdcard.img' % self.imageDirPath])
             args.extend(['-data',    '%suserdata.img' % self.imageDirPath])
             args.extend(['-port',    str(self.port)])
+            print "emulator port is:"+str(self.port)
             args.extend(['-no-boot-anim'])
+            args.extend(['-prop', 'dalvik.vm.execution-mode=int:portable'])
+            args.extend(['-timezone', 'Asia/Shanghai'])
             if self.runHeadless:
                 args.extend(['-no-window'])
             self.log.debug('- args: %s' % args)
@@ -132,6 +138,9 @@ class EmulatorClient:
         # Set portable mode
         self.runAdbCommand(['shell', 'setprop', 'dalvik.vm.execution-mode', 'int:portable'])
         
+        #sync with host time
+        hosttime = time.strftime("%Y%m%d.%H%M%S")
+        self.runAdbCommand(['shell', 'date', '-s',hosttime])
         # Wait
         time.sleep(60)
 
@@ -140,7 +149,7 @@ class EmulatorClient:
         Stops the emulator
         """
         if self.emulator is None:
-            raise EmulatorClientError('Emulator not startet')
+            raise EmulatorClientError('Emulator not started')
         self.emulator.terminate()
         self.emulator = None
 
@@ -149,7 +158,7 @@ class EmulatorClient:
         Kills the emulator
         """
         if self.emulator is None:
-            raise EmulatorClientError('Emulator not startet')
+            raise EmulatorClientError('Emulator not started')
 
         if not self.logcatRedirectProcess is None:
             self.logcatRedirectProcess.kill()
@@ -187,6 +196,12 @@ class EmulatorClient:
         Changes the global taint log action mask
         """
         self.setProperty(TaintLogKeyEnum.GLOBAL_ACTION_MASK_KEY, theMask)
+    
+    def changeGlobalTaintLogFileSystemTaintMask(self, theMask):
+        """
+        Changes the global taint log action mask
+        """
+        self.setProperty(TaintLogKeyEnum.FS_LOG_TIMESTAMP_KEY, theMask)
 
     def changeGlobalTaintLogTaintMask(self, theMask):
         """
@@ -228,7 +243,7 @@ class EmulatorClient:
         """
         args = ['shell', 'am', 'startservice',
                 '-n', '%s/%s' % (thePackage, theService)]
-        self.runAdbCommand(args)
+        #FIXME: self.runAdbCommand(args)
         # adb shell am startservice -c android.intent.category.defult -n com.nicky.lyyws.xmall/.MainService
     
     def uninstallPackage(self, thePackage):

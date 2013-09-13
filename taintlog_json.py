@@ -33,6 +33,13 @@ class CipherModeEnum:
     ENCRYPT_MODE = 1
     DECRYPT_MODE = 2
 
+class SimulatorActionEnum:
+    DUMMY_ACTION = "dummy"
+    INSTALL_APP_ACTION = 'install_app'
+    SIMULATE_SEND_SMS_ACTION = 'simulate_send_sms'
+    SIMULATE_PHONE_CALLIN_ACTION = 'simulate_phone_callin'
+    SIMULATE_GPS_MOVE_ACTION = 'simulate_gps_move'
+    
 
 # ================================================================================
 # Json Base Class
@@ -65,10 +72,13 @@ class AppReportEntry(BaseReportEntry):
     id = 0
     appPackage = ''
     appPath = ''
+    appName = ''
     logcatFile = ''
     md5Hash = ''
     startTime = ''
     endTime = ''
+    actionList = []
+    simulatorActions = []
 
 class MainReportEntry(BaseReportEntry):
     """
@@ -365,11 +375,64 @@ class SendSmsLogEntry(BaseLogEntry):
         if theDetailsFlag: columnList.append(self.stackTraceStr)
         return columnList
 
+class SimulatorActionLogEntry(BaseLogEntry):
+    timestamp = ''
+    
+    @staticmethod
+    def makeInstallAction(pk,tm):
+        return SimulatorInstallAppAction(package = pk,timestamp = tm)
+    
+    @staticmethod
+    def makeSmsAction(number,content,timestamp):
+        return SimulatorSmsAction(number = number,content = content,timestamp = timestamp)
+    
+    @staticmethod
+    def makeGpsAction(x,y,timestamp):
+        return SimulatorGpsMoveAction(timestamp = timestamp,x = x,y = y)
+    
+    @staticmethod
+    def makeCallInAction(number,timestamp):
+        return SimulatorCallInAction(number = number,timestamp = timestamp)
 
+class SimulatorGpsMoveAction(SimulatorActionLogEntry):
+    action = SimulatorActionEnum.SIMULATE_GPS_MOVE_ACTION
+    x = 0.0
+    y = 0.0
+    
+class SimulatorCallInAction(SimulatorActionLogEntry):
+    action = SimulatorActionEnum.SIMULATE_PHONE_CALLIN_ACTION
+    number = ""
+    
+class SimulatorSmsAction(SimulatorActionLogEntry):
+    action = SimulatorActionEnum.SIMULATE_SEND_SMS_ACTION
+    number = ""
+    content = ""
+    
+class SimulatorInstallAppAction(SimulatorActionLogEntry):
+    action = SimulatorActionEnum.INSTALL_APP_ACTION
+    package = ""
 # ================================================================================
 # Json En-/Decoder
 # ================================================================================
+looker = {'__CallActionLogEntry__':CallActionLogEntry,
+              '__CipherUsageLogEntry__':CipherUsageLogEntry,
+              '__FileDescriptorLogEntry__':None,
+              '__FileSystemLogEntry__':FileSystemLogEntry,
+              '__NetworkSendLogEntry__':NetworkSendLogEntry,
+              '__SSLLogEntry__':SSLLogEntry,
+              '__SendSmsLogEntry__':SendSmsLogEntry,
+              '__SimulatorGpsMoveAction__':SimulatorGpsMoveAction,
+              '__SimulatorCallInAction__':SimulatorCallInAction,
+              '__SimulatorSmsAction__':SimulatorSmsAction,
+              
+              #report objects
+              "__AppReportEntry__":AppReportEntry,
+              '__MainReportEntry__':MainReportEntry,
+              }
+ 
+ 
 class _JSONEncoder(json.JSONEncoder):
+    
     def default(self, theObject):
         if hasattr(theObject, '_json'):
             res = {}
@@ -385,14 +448,24 @@ class _JSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, theObject)
 
 def _JSONDecoder(theDict):
-    object = None
-    type = None
+    objtype = None
 
-    for type in theDict.keys():
-        if type.startswith("__"):
+    for t in theDict.keys():
+        if t.startswith("__") and t.endswith("__") and t in looker:
+            objtype = t
             break
-    if type == None: return theDict
+        
+    if objtype == None: return theDict
+    
+    obj = looker[objtype]()
+    '''
+    objstr = objtype[2:-2]
+    klass = type(str(objstr),(object,),{})
+    #object = looker[objstr]()
+    obj = klass()
+    '''
 
+    '''
     # Log objects
     if '__CallActionLogEntry__' == type:
         object = CallActionLogEntry()
@@ -408,6 +481,12 @@ def _JSONDecoder(theDict):
         object = SSLLogEntry()
     elif '__SendSmsLogEntry__' == type:
         object = SendSmsLogEntry()
+    elif '__SimulatorGpsMoveAction__' == type:
+        object = SimulatorGpsMoveAction()
+    elif '__SimulatorCallInAction__' == type:
+        object = SimulatorCallInAction()
+    elif '__SimulatorSmsAction__' == type:
+        object = SimulatorSmsAction()
 
     # Report objects
     elif '__AppReportEntry__' == type:
@@ -418,12 +497,15 @@ def _JSONDecoder(theDict):
     # Else...
     else:
         raise Exception('Unkown type \'%s\' found' % type)
+    '''
 
-    if not object: return theDict
+    if not object: 
+        print "unknow type "+type
+        return theDict
 
-    object.__dict__.update(theDict)
+    obj.__dict__.update(theDict)
 
-    return object
+    return obj
 
 
 # ================================================================================
@@ -438,3 +520,4 @@ class JsonFactory:
 
     def json2Py(self, theString):
         return json.loads(theString, object_hook=_JSONDecoder)
+    
